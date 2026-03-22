@@ -259,9 +259,7 @@ def _document_batches(split, tokenizer_batch_size=128):
             rg_end = rows_read + num_rows
             rows_read += num_rows
 
-            split_end = end_row if end_row is not None else float('inf')
-
-            if rg_end <= start_row or rg_start >= split_end:
+            if (end_row is not None and rg_start >= end_row) or rg_end <= start_row:
                 continue
 
             # Overlap found
@@ -269,7 +267,10 @@ def _document_batches(split, tokenizer_batch_size=128):
             
             # Slice batch to split boundaries
             local_start = max(0, start_row - rg_start)
-            local_end = min(num_rows, int(split_end - rg_start))
+            if end_row is not None:
+                local_end = min(num_rows, int(end_row - rg_start))
+            else:
+                local_end = num_rows
             batch = batch[local_start:local_end]
 
             for i in range(0, len(batch), tokenizer_batch_size):
