@@ -32,7 +32,8 @@ class GPTConfig:
     n_head: int = 6
     n_kv_head: int = 6
     n_embd: int = 768
-    window_pattern: str = "SSSL"
+    window_pattern: str = "L"
+    rope_base: int = 10000
 
 
 def norm(x):
@@ -137,7 +138,7 @@ class GPT(nn.Module):
         })
         # Rotary embeddings
         self.rotary_seq_len = config.sequence_len * 10
-        cos, sin = self._precompute_rotary_embeddings(self.rotary_seq_len, head_dim)
+        cos, sin = self._precompute_rotary_embeddings(self.rotary_seq_len, head_dim, base=config.rope_base)
         self.register_buffer("cos", cos, persistent=False)
         self.register_buffer("sin", sin, persistent=False)
 
@@ -168,7 +169,7 @@ class GPT(nn.Module):
                 torch.nn.init.zeros_(block.attn.ve_gate.weight)
         # Rotary embeddings
         head_dim = self.config.n_embd // self.config.n_head
-        cos, sin = self._precompute_rotary_embeddings(self.rotary_seq_len, head_dim)
+        cos, sin = self._precompute_rotary_embeddings(self.rotary_seq_len, head_dim, base=self.config.rope_base)
         self.cos, self.sin = cos, sin
         # Cast embeddings to bf16
         self.transformer.wte.to(dtype=torch.bfloat16)
@@ -425,6 +426,7 @@ class MuonAdamW(torch.optim.Optimizer):
 # ---------------------------------------------------------------------------
 
 # Model architecture
+ROTARY_BASE = 10000      # default base for rotary embeddings
 ASPECT_RATIO = 64       # model_dim = depth * ASPECT_RATIO
 HEAD_DIM = 128          # target head dimension for attention
 WINDOW_PATTERN = "L" # sliding window pattern: L=full, S=half context
@@ -466,17 +468,17 @@ def run_training(trial=None, hparams=None):
     head_dim = hparams['head_dim']
     window_pattern = hparams['window_pattern']
 
-    def build_model_config(depth, aspect_ratio, head_dim, window_pattern):
+    def build_model_config(depth, aspect_ratio, head_dim, window_pattern, rope_base):
         base_dim = depth * aspect_ratio
         model_dim = ((base_dim + head_dim - 1) // head_dim) * head_dim
         num_heads = model_dim // head_dim
         return GPTConfig(
             sequence_len=MAX_SEQ_LEN, vocab_size=vocab_size,
             n_layer=depth, n_head=num_heads, n_kv_head=num_heads, n_embd=model_dim,
-            window_pattern=window_pattern,
+            window_pattern=window_pattern, rope_base=rope_base,
         )
 
-    config = build_model_config(depth, aspect_ratio, head_dim, window_pattern)
+    config = build_model_config(depth, aspect_ratio, head_dim, window_pattern, hparams['rope_base'])
     print(f"Model config: {asdict(config)}")
 
     with torch.device("meta"):
@@ -648,6 +650,7 @@ def objective(trial):
         'warmup_ratio': trial.suggest_float('warmup_ratio', 0.0, 0.1),
         'warmdown_ratio': trial.suggest_float('warmdown_ratio', 0.3, 0.7),
         'final_lr_frac': trial.suggest_float('final_lr_frac', 0.0, 0.1),
+        'rope_base': trial.suggest_categorical('rope_base', [i * 10000 for i in range(1, 10)]),
     }
 
     # Run training
@@ -710,6 +713,7 @@ if __name__ == "__main__":
         'warmup_ratio': WARMUP_RATIO,
         'warmdown_ratio': WARMDOWN_RATIO,
         'final_lr_frac': FINAL_LR_FRAC,
+        'rope_base': ROTARY_BASE,
     }
     study.enqueue_trial(baseline_hparams)
 
