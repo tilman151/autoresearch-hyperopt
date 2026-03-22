@@ -445,7 +445,7 @@ FINAL_LR_FRAC = 0.0     # final LR as fraction of initial
 
 # Model size
 DEPTH = 4               # number of transformer layers
-DEVICE_BATCH_SIZE = 16  # reduced for RTX 3060 (12GB VRAM)
+DEVICE_BATCH_SIZE = 32  # reduced for RTX 3060 (12GB VRAM)
 # RTX 3060 (Ampere) peak BF16 TFLOPS is ~102 (non-Tensor) or ~204 (Tensor)
 # BF16_PEAK_FLOPS = 989.5e12
 BF16_PEAK_FLOPS = 102e12
@@ -633,14 +633,40 @@ def run_training(trial=None, hparams=None):
     return val_bpb
 
 def objective(trial):
-    # Propose hyperparameters
+    # Propose depth and aspect_ratio
+    depth = trial.suggest_int('depth', 4, 16)
+    aspect_ratio = trial.suggest_int('aspect_ratio', 32, 256, step=32)
+    head_dim = 128
+
+    # Calculate model dimension and check parameter count as a proxy for VRAM
+    # VRAM ~= (Params * 4 bytes [Muon stores momentum in fp32]) + (Activations)
+    # For a rough limit, let's keep params < 100M for 12GB safety with batch size 32
+    base_dim = depth * aspect_ratio
+    model_dim = ((base_dim + head_dim - 1) // head_dim) * head_dim
+
+    # Estimating number of parameters (rough)
+    # Layer matrices: 4 * dim^2 (MLP) + 4 * dim^2 (Attn) = 8 * dim^2 per layer
+    # Total params ~ depth * 8 * model_dim^2 + 2 * vocab_size * model_dim
+    approx_params = depth * 8 * (model_dim**2) + 2 * VOCAB_SIZE * model_dim
+
+    if approx_params > 150_000_000: # 150M params is likely pushing 12GB with activations
+        raise optuna.exceptions.TrialPruned("Model too large for 12GB VRAM")
+
+    # Dynamically adjust device_batch_size if needed
+    # If model is large, reduce batch size and increase grad_accum
+    if approx_params > 80_000_000:
+        device_batch_size =DEVICE_BATCH_SIZE // 2
+    else:
+        device_batch_size = DEVICE_BATCH_SIZE
+
+    # Propose other hyperparameters
     hparams = {
-        'depth': 4,
-        'aspect_ratio': 64,
-        'head_dim': 128,
+        'depth': depth,
+        'aspect_ratio': aspect_ratio,
+        'head_dim': head_dim,
         'window_pattern': "L",
         'total_batch_size': 2**14,
-        'device_batch_size': 32,
+        'device_batch_size': device_batch_size,
         'embedding_lr': trial.suggest_float('embedding_lr', 0.1, 1.0, log=True),
         'unembedding_lr': trial.suggest_float('unembedding_lr', 0.001, 0.01, log=True),
         'matrix_lr': trial.suggest_float('matrix_lr', 0.01, 0.1, log=True),
@@ -657,6 +683,10 @@ def objective(trial):
     try:
         val_bpb = run_training(trial=trial, hparams=hparams)
         return val_bpb
+    except torch.cuda.OutOfMemoryError:
+        print("Out of memory, pruning trial.")
+        torch.cuda.empty_cache()
+        return float('inf')
     except Exception as e:
         print(f"Trial failed: {e}")
         return float('inf')
@@ -679,7 +709,8 @@ if __name__ == "__main__":
     global fa3
     fa3 = get_kernel(repo).flash_attn_interface
 
-    from prepare import MAX_SEQ_LEN, TIME_BUDGET, Tokenizer, make_dataloader, evaluate_bpb
+    from prepare import MAX_SEQ_LEN, TIME_BUDGET, Tokenizer, make_dataloader, evaluate_bpb, \
+    VOCAB_SIZE
 
     t_start = time.time()
     torch.set_float32_matmul_precision("high")
@@ -705,6 +736,8 @@ if __name__ == "__main__":
 
     # Always run a baseline trial with the default settings first
     baseline_hparams = {
+        'depth': 4,
+        'aspect_ratio': 64,
         'embedding_lr': EMBEDDING_LR,
         'unembedding_lr': UNEMBEDDING_LR,
         'matrix_lr': MATRIX_LR,
