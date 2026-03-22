@@ -697,6 +697,8 @@ if __name__ == "__main__":
                         help="Optuna sampler (algorithm) to use.")
     parser.add_argument("--n_trials", type=int, default=1,
                         help="Number of optimization trials to run.")
+    parser.add_argument("--timeout", type=float, default=None,
+                        help="Termination time for the study in hours.")
     parser.add_argument("--study_name", type=str, default="hyperopt",
                         help="Optuna study name.")
     args = parser.parse_args()
@@ -750,8 +752,10 @@ if __name__ == "__main__":
     }
     study.enqueue_trial(baseline_hparams)
 
-    if args.n_trials > 1:
-        study.optimize(objective, n_trials=args.n_trials)
+    timeout = args.timeout * 3600 if args.timeout is not None else None
+
+    if args.n_trials > 1 or timeout is not None:
+        study.optimize(objective, n_trials=args.n_trials if args.n_trials > 1 else None, timeout=timeout)
         print("\nBest trial:")
         trial = study.best_trial
         print(f"  Value: {trial.value}")
