@@ -695,11 +695,11 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Autoresearch pretraining script with Optuna optimization.")
     parser.add_argument("--sampler", type=str, default="TPE", choices=["TPE", "Random", "CMAES", "GP"],
                         help="Optuna sampler (algorithm) to use.")
-    parser.add_argument("--n_trials", type=int, default=1,
+    parser.add_argument("--n-trials", type=int, default=1,
                         help="Number of optimization trials to run.")
     parser.add_argument("--timeout", type=float, default=None,
                         help="Termination time for the study in hours.")
-    parser.add_argument("--study_name", type=str, default="hyperopt",
+    parser.add_argument("--study-name", type=str, default="hyperopt",
                         help="Optuna study name.")
     args = parser.parse_args()
 
