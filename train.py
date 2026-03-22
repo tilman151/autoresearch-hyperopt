@@ -693,7 +693,7 @@ def objective(trial):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Autoresearch pretraining script with Optuna optimization.")
-    parser.add_argument("--sampler", type=str, default="TPE", choices=["TPE", "Random", "CMAES"],
+    parser.add_argument("--sampler", type=str, default="TPE", choices=["TPE", "Random", "CMAES", "GP"],
                         help="Optuna sampler (algorithm) to use.")
     parser.add_argument("--n_trials", type=int, default=1,
                         help="Number of optimization trials to run.")
