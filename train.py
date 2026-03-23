@@ -8,6 +8,10 @@ import os
 os.environ["PYTORCH_ALLOC_CONF"] = "expandable_segments:True"
 os.environ["HF_HUB_DISABLE_PROGRESS_BARS"] = "1"
 
+import torch._dynamo
+torch._dynamo.config.cache_size_limit = 512
+torch._dynamo.config.force_parameter_static_shapes = False
+
 import gc
 import math
 import time
@@ -171,8 +175,11 @@ class GPT(nn.Module):
         head_dim = self.config.n_embd // self.config.n_head
         cos, sin = self._precompute_rotary_embeddings(self.rotary_seq_len, head_dim, base=self.config.rope_base)
         self.cos, self.sin = cos, sin
-        # Cast embeddings to bf16
+        # Cast embeddings and specific parameters to bf16
         self.transformer.wte.to(dtype=torch.bfloat16)
+        self.lm_head.to(dtype=torch.bfloat16)
+        self.resid_lambdas.data = self.resid_lambdas.data.to(dtype=torch.bfloat16)
+        self.x0_lambdas.data = self.x0_lambdas.data.to(dtype=torch.bfloat16)
         for ve in self.value_embeds.values():
             ve.to(dtype=torch.bfloat16)
 
@@ -277,7 +284,7 @@ class GPT(nn.Module):
 
         softcap = 15
         logits = self.lm_head(x)
-        logits = logits.float()
+        logits = logits.to(torch.float32)
         logits = softcap * torch.tanh(logits / softcap)
 
         if targets is not None:
@@ -300,14 +307,14 @@ polar_express_coeffs = [
 
 @torch.compile(dynamic=False, fullgraph=True)
 def adamw_step_fused(p, grad, exp_avg, exp_avg_sq, step_t, lr_t, beta1_t, beta2_t, eps_t, wd_t):
-    p.mul_(1 - lr_t * wd_t)
+    p.mul_(1 - (lr_t * wd_t).to(p.dtype))
     exp_avg.lerp_(grad, 1 - beta1_t)
     exp_avg_sq.lerp_(grad.square(), 1 - beta2_t)
     bias1 = 1 - beta1_t ** step_t
     bias2 = 1 - beta2_t ** step_t
     denom = (exp_avg_sq / bias2).sqrt() + eps_t
     step_size = lr_t / bias1
-    p.add_(exp_avg / denom, alpha=-step_size)
+    p.add_(exp_avg / denom, alpha=-step_size.to(p.dtype))
 
 @torch.compile(dynamic=False, fullgraph=True)
 def muon_step_fused(stacked_grads, stacked_params, momentum_buffer, second_momentum_buffer,
@@ -317,7 +324,7 @@ def muon_step_fused(stacked_grads, stacked_params, momentum_buffer, second_momen
     momentum_buffer.lerp_(stacked_grads, 1 - momentum)
     g = stacked_grads.lerp_(momentum_buffer, momentum)
     # Polar express orthogonalization
-    X = g.bfloat16()
+    X = g.to(torch.bfloat16)
     X = X / (X.norm(dim=(-2, -1), keepdim=True) * 1.02 + 1e-6)
     if g.size(-2) > g.size(-1):
         for a, b, c in polar_express_coeffs[:ns_steps]:
@@ -332,13 +339,13 @@ def muon_step_fused(stacked_grads, stacked_params, momentum_buffer, second_momen
     g = X
     # NorMuon variance reduction
     beta2 = beta2_t.to(g.dtype)
-    v_mean = g.float().square().mean(dim=red_dim, keepdim=True)
-    red_dim_size = g.size(red_dim)
+    v_mean = g.to(torch.float32).square().mean(dim=red_dim, keepdim=True)
+    red_dim_size = torch.tensor(g.size(red_dim), dtype=torch.float32, device=g.device)
     v_norm_sq = v_mean.sum(dim=(-2, -1), keepdim=True) * red_dim_size
     v_norm = v_norm_sq.sqrt()
     second_momentum_buffer.lerp_(v_mean.to(dtype=second_momentum_buffer.dtype), 1 - beta2)
     step_size = second_momentum_buffer.clamp_min(1e-10).rsqrt()
-    scaled_sq_sum = (v_mean * red_dim_size) * step_size.float().square()
+    scaled_sq_sum = (v_mean * red_dim_size) * step_size.to(torch.float32).square()
     v_norm_new = scaled_sq_sum.sum(dim=(-2, -1), keepdim=True).sqrt()
     final_scale = step_size * (v_norm / v_norm_new.clamp_min(1e-10))
     g = g * final_scale.to(g.dtype)
@@ -690,6 +697,12 @@ def objective(trial):
     except Exception as e:
         print(f"Trial failed: {e}")
         return float('inf')
+    finally:
+        # Clear the torch.compile (Dynamo) cache between trials
+        # This prevents reaching the recompile_limit across many different architectures
+        torch._dynamo.reset()
+        torch.cuda.empty_cache()
+        gc.collect()
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Autoresearch pretraining script with Optuna optimization.")
