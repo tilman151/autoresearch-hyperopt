@@ -7,6 +7,7 @@ Usage: uv run train.py
 import os
 
 from optuna import Trial
+from optuna.pruners import MedianPruner
 
 os.environ["PYTORCH_ALLOC_CONF"] = "expandable_segments:True"
 os.environ["HF_HUB_DISABLE_PROGRESS_BARS"] = "1"
@@ -463,7 +464,7 @@ BF16_PEAK_FLOPS = 102e12
 # Training loop (wrapped in a function for Optuna)
 # ---------------------------------------------------------------------------
 
-def run_training(trial=None, hparams=None):
+def run_training(trial: Trial, hparams=None):
     torch.manual_seed(42)
     torch.cuda.manual_seed(42)
     device = torch.device("cuda")
@@ -525,7 +526,7 @@ def run_training(trial=None, hparams=None):
     warmdown_ratio = hparams['warmdown_ratio']
     final_lr_frac = hparams['final_lr_frac']
 
-    def     get_lr_multiplier(progress):
+    def get_lr_multiplier(progress):
         if progress < warmup_ratio:
             return progress / warmup_ratio if warmup_ratio > 0 else 1.0
         elif progress < 1.0 - warmdown_ratio:
@@ -599,7 +600,7 @@ def run_training(trial=None, hparams=None):
             # Report intermediate results for pruning
             trial.report(debiased_smooth_loss, step)
             if trial.should_prune():
-                raise optuna.exceptions.TrialPruned()
+                raise optuna.exceptions.TrialPruned(f"Intermediate result {debiased_smooth_loss:.6f} | Trial Pruned")
 
         # GC management (Python's GC causes ~500ms stalls)
         if step == 0:
@@ -697,6 +698,8 @@ def objective(trial: Trial):
         print("Out of memory, pruning trial.")
         torch.cuda.empty_cache()
         return float('inf')
+    except optuna.TrialPruned:
+        raise
     except Exception as e:
         print(f"\nTrial failed: {repr(e)}")
         return float('inf')
@@ -748,6 +751,7 @@ if __name__ == "__main__":
         study_name=args.study_name,
         direction="minimize",
         sampler=sampler,
+        pruner=MedianPruner(interval_steps=50),
         storage="sqlite:///optuna.db",
         load_if_exists=True
     )
