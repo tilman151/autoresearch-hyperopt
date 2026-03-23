@@ -525,7 +525,7 @@ def run_training(trial=None, hparams=None):
     warmdown_ratio = hparams['warmdown_ratio']
     final_lr_frac = hparams['final_lr_frac']
 
-    def get_lr_multiplier(progress):
+    def     get_lr_multiplier(progress):
         if progress < warmup_ratio:
             return progress / warmup_ratio if warmup_ratio > 0 else 1.0
         elif progress < 1.0 - warmdown_ratio:
@@ -698,7 +698,7 @@ def objective(trial: Trial):
         torch.cuda.empty_cache()
         return float('inf')
     except Exception as e:
-        print(f"Trial failed: {e}")
+        print(f"\nTrial failed: {repr(e)}")
         return float('inf')
     finally:
         # Clear the torch.compile (Dynamo) cache between trials
