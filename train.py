@@ -5,6 +5,9 @@ Usage: uv run train.py
 """
 
 import os
+
+from optuna import Trial
+
 os.environ["PYTORCH_ALLOC_CONF"] = "expandable_segments:True"
 os.environ["HF_HUB_DISABLE_PROGRESS_BARS"] = "1"
 
@@ -569,8 +572,8 @@ def run_training(trial=None, hparams=None):
 
         train_loss_f = train_loss.item()
 
-        if math.isnan(train_loss_f) or train_loss_f > 100:
-            print("FAIL")
+        if math.isnan(train_loss_f) or train_loss_f > 1000:
+            print(f"FAIL: loss={train_loss_f:.2f}")
             return float('inf')
 
         torch.cuda.synchronize()
@@ -639,10 +642,10 @@ def run_training(trial=None, hparams=None):
 
     return val_bpb
 
-def objective(trial):
+def objective(trial: Trial):
     # Propose depth and aspect_ratio
-    depth = trial.suggest_int('depth', 4, 16)
-    aspect_ratio = trial.suggest_int('aspect_ratio', 32, 256, step=32)
+    depth = trial.suggest_int('depth', 2, 8)
+    aspect_ratio = trial.suggest_int('aspect_ratio', 32, 128, step=32)
     head_dim = 128
 
     # Calculate model dimension and check parameter count as a proxy for VRAM
@@ -656,12 +659,12 @@ def objective(trial):
     # Total params ~ depth * 8 * model_dim^2 + 2 * vocab_size * model_dim
     approx_params = depth * 8 * (model_dim**2) + 2 * VOCAB_SIZE * model_dim
 
-    if approx_params > 150_000_000: # 150M params is likely pushing 12GB with activations
+    if approx_params > 120_000_000: # 120M params is likely pushing 12GB with activations
         raise optuna.exceptions.TrialPruned("Model too large for 12GB VRAM")
 
     # Dynamically adjust device_batch_size if needed
     # If model is large, reduce batch size and increase grad_accum
-    if approx_params > 80_000_000:
+    if approx_params > 60_000_000:
         device_batch_size =DEVICE_BATCH_SIZE // 2
     else:
         device_batch_size = DEVICE_BATCH_SIZE
@@ -674,15 +677,15 @@ def objective(trial):
         'window_pattern': "L",
         'total_batch_size': 2**14,
         'device_batch_size': device_batch_size,
-        'embedding_lr': trial.suggest_float('embedding_lr', 0.1, 1.0, log=True),
-        'unembedding_lr': trial.suggest_float('unembedding_lr', 0.001, 0.01, log=True),
-        'matrix_lr': trial.suggest_float('matrix_lr', 0.01, 0.1, log=True),
-        'scalar_lr': trial.suggest_float('scalar_lr', 0.1, 1.0, log=True),
-        'weight_decay': trial.suggest_float('weight_decay', 0.01, 1.0, log=True),
+        'embedding_lr': trial.suggest_float('embedding_lr', 0.05, 0.5, step=0.01),
+        'unembedding_lr': trial.suggest_float('unembedding_lr', 0.001, 0.01, step=0.001),
+        'matrix_lr': trial.suggest_float('matrix_lr', 0.005, 0.05, step=0.005),
+        'scalar_lr': trial.suggest_float('scalar_lr', 0.05, 0.7, step=0.05),
+        'weight_decay': trial.suggest_float('weight_decay', 0.01, 0.5, step=0.01),
         'adam_betas': (0.8, 0.95),
-        'warmup_ratio': trial.suggest_float('warmup_ratio', 0.0, 0.1),
-        'warmdown_ratio': trial.suggest_float('warmdown_ratio', 0.3, 0.7),
-        'final_lr_frac': trial.suggest_float('final_lr_frac', 0.0, 0.1),
+        'warmup_ratio': trial.suggest_float('warmup_ratio', 0.0, 0.25, step=0.01),
+        'warmdown_ratio': trial.suggest_float('warmdown_ratio', 0.3, 0.7, step=0.05),
+        'final_lr_frac': trial.suggest_float('final_lr_frac', 0.0, 0.1, step=0.01),
         'rope_base': trial.suggest_categorical('rope_base', [i * 10000 for i in range(1, 10)]),
     }
 
