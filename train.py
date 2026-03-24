@@ -678,7 +678,7 @@ def objective(trial: Trial):
         'window_pattern': "L",
         'total_batch_size': 2**14,
         'device_batch_size': device_batch_size,
-        'embedding_lr': trial.suggest_float('embedding_lr', 0.05, 0.5, step=0.01),
+        'embedding_lr': trial.suggest_float('embedding_lr', 0.05, 0.7, step=0.01),
         'unembedding_lr': trial.suggest_float('unembedding_lr', 0.001, 0.01, step=0.001),
         'matrix_lr': trial.suggest_float('matrix_lr', 0.005, 0.05, step=0.005),
         'scalar_lr': trial.suggest_float('scalar_lr', 0.05, 0.7, step=0.05),
