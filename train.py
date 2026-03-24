@@ -738,12 +738,16 @@ if __name__ == "__main__":
 
     if args.sampler == "TPE":
         sampler = optuna.samplers.TPESampler()
+        pruner = MedianPruner(interval_steps=50)
     elif args.sampler == "Random":
         sampler = optuna.samplers.RandomSampler()
+        pruner = MedianPruner(interval_steps=50)
     elif args.sampler == "CMAES":
         sampler = optuna.samplers.CmaEsSampler()
+        pruner = optuna.pruners.NopPruner()
     elif args.sampler == "GP":
         sampler = optuna.samplers.GPSampler()
+        pruner = optuna.pruners.NopPruner()
     else:
         raise ValueError(f"Unknown sampler: {args.sampler}")
 
@@ -751,7 +755,7 @@ if __name__ == "__main__":
         study_name=args.study_name,
         direction="minimize",
         sampler=sampler,
-        pruner=MedianPruner(interval_steps=50),
+        pruner=pruner,
         storage="sqlite:///optuna.db",
         load_if_exists=True
     )
